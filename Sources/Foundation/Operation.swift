@@ -73,20 +73,33 @@ open class Operation : NSObject {
         case finished = 0xF4
     }
     
+    /// 队列中前一个operation(按照加入队列的先后顺序)
     internal var __previousOperation: Unmanaged<Operation>?
+    /// 队列中后一个operation(按照加入队列的先后顺序)
     internal var __nextOperation: Unmanaged<Operation>?
+    /// 队列中相同优先级中的后一个operation
     internal var __nextPriorityOperation: Unmanaged<Operation>?
+    /// 自己所寄身的队列
     internal var __queue: Unmanaged<OperationQueue>?
+    /// 自己依赖的operation
     internal var __dependencies = [Operation]()
+    /// 依赖于自己的operation
     internal var __downDependencies = Set<PointerHashedUnmanagedBox<Operation>>()
+    /// 未完成的依赖数
     internal var __unfinishedDependencyCount: Int = 0
+    /// 执行结束回调
     internal var __completion: (() -> Void)?
+    /// 名称
     internal var __name: String?
     internal var __schedule: DispatchWorkItem?
+    /// 执行/就绪状态
     internal var __state: __NSOperationState = .initialized
+    /// 优先级（自己）
     internal var __priorityValue: Operation.QueuePriority.RawValue?
     internal var __cachedIsReady: Bool = true
+    /// 是否被取消
     internal var __isCancelled: Bool = false
+    /// 优先级（对应于队列）
     internal var __propertyQoS: QualityOfService?
     
     var __waitCondition = NSCondition()
@@ -757,6 +770,7 @@ extension OperationQueue {
 }
 
 @available(OSX 10.5, *)
+/// 只有当OperationQueue不是Main的时候，用户才有自定义的空间，否则，需要遵从系统的行为。
 open class OperationQueue : NSObject, ProgressReporting {
     let __queueLock = NSLock()
     let __atomicLoad = NSLock()
@@ -766,16 +780,23 @@ open class OperationQueue : NSObject, ProgressReporting {
     var __lastPriorityOperation: (barrier: Unmanaged<Operation>?, veryHigh: Unmanaged<Operation>?, high: Unmanaged<Operation>?, normal: Unmanaged<Operation>?, low: Unmanaged<Operation>?, veryLow: Unmanaged<Operation>?)
     var _barriers = [_BarrierOperation]()
     var _progress: _OperationQueueProgress?
+    /// 添加到当前queue的Operation数目
     var __operationCount: Int = 0
+    /// 最大并发数
     var __maxNumOps: Int = OperationQueue.defaultMaxConcurrentOperationCount
+    /// 实际的最大并发数(若最大并发数为-1，则实际最大并发数为 Int32.max；若最大并发数大于Int32.max，则实际最大并发数为Int32.max)
     var __actualMaxNumOps: Int32 = .max
+    /// 正在执行的Operation数
     var __numExecOps: Int32 = 0
+    /// 实际使用的gcd的队列
     var __dispatch_queue: DispatchQueue?
     var __backingQueue: DispatchQueue?
+    /// OperationQueue名称
     var __name: String?
     var __suspended: Bool = false
     var __overcommit: Bool = false
     var __propertyQoS: QualityOfService?
+    /// 是否为主队列
     var __mainQ: Bool = false
     var __progressReporting: Bool = false
     
@@ -963,6 +984,7 @@ open class OperationQueue : NSObject, ProgressReporting {
         Unmanaged.passUnretained(self).release()
         
         // unset current tsd
+        // 一个加了锁，一个没加锁
         if op.isFinished && op._state.rawValue < Operation.__NSOperationState.finishing.rawValue {
             Operation.observeValue(forKeyPath: _NSOperationIsFinished, ofObject: op)
         }
@@ -971,6 +993,8 @@ open class OperationQueue : NSObject, ProgressReporting {
     internal func _schedule() {
         var retestOps = [Operation]()
         _lock()
+        // 如果是并发的话，则表示剩余最大可并发执行的空间
+        // 可以简单当成是可用线程数
         var slotsAvail = __actualMaxNumOps - __numExecOps
         for prio in Operation.QueuePriority.priorities {
             if 0 >= slotsAvail || _suspended {
@@ -1148,6 +1172,7 @@ open class OperationQueue : NSObject, ProgressReporting {
         var firstNewOp: Unmanaged<Operation>?
         var lastNewOp: Unmanaged<Operation>?
         for op in ops {
+            // 状态改为【.enqueuing】
             if op._compareAndSwapState(.initialized, .enqueuing) {
                 successes += 1
                 if 0 == failures {
@@ -1208,20 +1233,24 @@ open class OperationQueue : NSObject, ProgressReporting {
             if let old = old_last?.takeUnretainedValue() {
                 old.__nextOperation = pending
             } else {
+                // 新添加进的第一个
                 __firstOperation = pending
             }
+            // 最后一个
             __lastOperation = lastNewOp
         }
         while let pendingOperation = pending?.takeUnretainedValue() {
             if !barrier {
+                // 若在barrier等级的队列中有Operation，则将该队列中的所有Operation都设为当前Operation的依赖
                 var barrierOp = _firstPriorityOperation(Operation.QueuePriority.barrier)
                 while let barrierOperation = barrierOp?.takeUnretainedValue() {
                     pendingOperation._addDependency(barrierOperation)
                     barrierOp = barrierOperation.__nextPriorityOperation
                 }
             }
-            
+            // 状态改为【.enqueued】
             _ = pendingOperation._compareAndSwapState(.enqueuing, .enqueued)
+            // 优先级处理
             var pri = pendingOperation.__priorityValue
             if pri == nil {
                 let v = __actualMaxNumOps == 1 ? nil : pendingOperation.__propertyQoS
@@ -1238,11 +1267,15 @@ open class OperationQueue : NSObject, ProgressReporting {
                 }
             }
             pendingOperation.__nextPriorityOperation = nil
+            // 当前等级的队列中last
             if let old_last = _lastPriorityOperation(pri)?.takeUnretainedValue() {
+                // 设最后一个的下一个为pending
                 old_last.__nextPriorityOperation = pending
             } else {
+                // 若当前等级的Operation队列为空，则设本Operation为队列中first
                 _setFirstPriorityOperation(pri!, pending)
             }
+            // 设为当前等级队列中的last
             _setlastPriorityOperation(pri!, pending)
             pending = pendingOperation.__nextOperation
         }
